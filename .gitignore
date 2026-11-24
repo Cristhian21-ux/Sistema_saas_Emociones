@@ -1,0 +1,20 @@
+node_modules/
+vendor/
+.venv/
+dist/
+__pycache__/
+.pytest_cache/
+.env
+*.sqlite
+*.log
+.coverage
+coverage/
+htmlcov/
+frontend/cypress/screenshots/
+frontend/cypress/videos/
+
+# Respaldos de la base de datos (contienen datos de pacientes)
+backups/
+
+# Caché del editor (servidor de lenguaje PHP) en la raíz
+/storage/

@@ -1,0 +1,91 @@
+# Despliegue de producción. Los secretos NO tienen valores por defecto: si falta alguno,
+# "docker compose up" se detiene con un mensaje. Defínelos en un archivo .env junto a este
+# (ver .env.produccion.example) o como variables de entorno del servidor.
+#
+# Solo el proxy (Caddy) queda expuesto a internet, en los puertos 80 y 443 con HTTPS automático.
+# La base de datos, el backend, el frontend y la IA solo son accesibles dentro de la red interna.
+
+x-secretos: &secretos
+  DB_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD (contraseña de la base de datos)}
+  IA_SERVICE_KEY: ${IA_SERVICE_KEY:?Falta IA_SERVICE_KEY (llave entre el backend y el servicio de IA)}
+
+services:
+  proxy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      DOMINIO: ${DOMINIO:?Falta DOMINIO (por ejemplo, app.tucentro.com)}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [frontend]
+
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: emociones_saas
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Falta DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Falta DB_ROOT_PASSWORD}
+    volumes: [db_data:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      retries: 10
+
+  ia-service:
+    build: ./ia-service
+    restart: unless-stopped
+    environment:
+      IA_SERVICE_KEY: ${IA_SERVICE_KEY:?Falta IA_SERVICE_KEY}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 15s
+      retries: 5
+
+  backend:
+    build: { context: ., dockerfile: docker/backend/Dockerfile }
+    restart: unless-stopped
+    env_file: ./backend/.env.docker
+    environment:
+      <<: *secretos
+      # Sin la misma APP_KEY no se pueden leer las historias clínicas cifradas: guárdala en un lugar seguro.
+      APP_KEY: ${APP_KEY:?Falta APP_KEY (genérala una sola vez y respáldala; ver README)}
+      APP_URL: https://${DOMINIO:?Falta DOMINIO}
+      FRONTEND_URL: https://${DOMINIO:?Falta DOMINIO}
+      # true = una sola empresa (sin registro público de centros). false = SaaS multi-centro con planes.
+      MODO_CENTRO_UNICO: ${MODO_CENTRO_UNICO:-true}
+    volumes:
+      # Archivos subidos (logos, etc.): sobreviven a reconstruir el contenedor.
+      - backend_storage:/var/www/html/storage/app
+    depends_on:
+      db: { condition: service_healthy }
+      ia-service: { condition: service_started }
+
+  frontend:
+    build: { context: ., dockerfile: docker/frontend/Dockerfile }
+    restart: unless-stopped
+    depends_on: [backend]
+
+  # Copia diaria de la base de datos en ./backups (comprimida). Cópiala también fuera del servidor.
+  respaldo:
+    image: mysql:8.4
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/respaldo.sh"]
+    environment:
+      MYSQL_PWD: ${DB_PASSWORD:?Falta DB_PASSWORD}
+      RETENCION_DIAS: ${RETENCION_DIAS:-14}
+    volumes:
+      - ./docker/respaldo/respaldo.sh:/respaldo.sh:ro
+      - ./backups:/backups
+    depends_on:
+      db: { condition: service_healthy }
+
+volumes:
+  db_data:
+  backend_storage:
+  caddy_data:
+  caddy_config:

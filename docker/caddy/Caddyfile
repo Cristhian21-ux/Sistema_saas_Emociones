@@ -1,0 +1,20 @@
+# Proxy de entrada: HTTPS automático (Let's Encrypt) para el dominio y redirección de HTTP a HTTPS.
+{$DOMINIO} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		-Server
+		-X-Powered-By
+	}
+
+	# Los endpoints internos de diagnóstico de Laravel no se publican.
+	@interno path /up
+	respond @interno 404
+
+	reverse_proxy frontend:80
+}
